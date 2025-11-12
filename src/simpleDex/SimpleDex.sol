@@ -34,6 +34,10 @@ contract SimpleDex is ERC20 {
     /*==============================================================
                                 EVENTS
     ==============================================================*/
+    event LiquidityAdded(address indexed _user, uint256 _amountOfTokens, uint256 _lpTokensMinted);
+    event LiquidityRemoved(
+        address indexed _user, uint256 _amountOfLpTokens, uint256 _ethReturned, uint256 _tokensReturned
+    );
 
     /*==============================================================
                                 MODIFIERS
@@ -96,12 +100,14 @@ contract SimpleDex is ERC20 {
         // Mint LP tokens to user
         _mint(msg.sender, lpTokensToMint);
 
+        emit LiquidityAdded(msg.sender, _amountOfTokens, lpTokensToMint);
+
         return lpTokensToMint;
     }
 
     /**
      * @notice `removeLiquidity` allows users to remove liquidity from the pool
-     * @param _amountOfLpTokens Amount of tokens to remove 
+     * @param _amountOfLpTokens Amount of tokens to remove
      * @return ethToReturn Amount of eth that will be returned to user
      * @return tokenToReturn Amount of token that will be returned to user
      */
@@ -117,9 +123,11 @@ contract SimpleDex is ERC20 {
 
         // Burn the lp tokens from the user and transfer the ETH and tokens
         _burn(msg.sender, _amountOfLpTokens);
-        (bool ethSent, ) = payable(msg.sender).call{value: ethToReturn}("");
+        (bool ethSent,) = payable(msg.sender).call{value: ethToReturn}("");
         bool tokenSent = IERC20(tokenAddress).transfer(msg.sender, tokenToReturn);
         require(ethSent && tokenSent, SimpleDex__TransferFailed());
+
+        emit LiquidityRemoved(msg.sender, _amountOfLpTokens, ethToReturn, tokenToReturn);
     }
 
     /// Internal Functions ///
