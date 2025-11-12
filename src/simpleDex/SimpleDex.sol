@@ -24,6 +24,7 @@ contract SimpleDex is ERC20 {
     error SimpleDex__CannotBeZeroAddress();
     error SimpleDex__InsufficientTokenAmount();
     error SimpleDex__TransferFailed();
+    error SimpleDex__InvalidAmount();
 
     /*==============================================================
                             STATE VARIABLES
@@ -55,9 +56,10 @@ contract SimpleDex is ERC20 {
 
     /**
      * @notice `addLiquidity` allows users to add liquidity to the pool
-     * @param _amount Amount of tokens to add
+     * @param _amountOfTokens Amount of tokens to add
+     * @return Amount of LP tokens minted
      */
-    function addLiquidity(uint256 _amount) external payable returns (uint256) {
+    function addLiquidity(uint256 _amountOfTokens) external payable returns (uint256) {
         uint256 lpTokensToMint;
         uint256 ethReserveBalance = address(this).balance;
         uint256 tokenReserveBalance = getReserve();
@@ -67,7 +69,7 @@ contract SimpleDex is ERC20 {
         // If the reserve is empty, take any user supplied value for initial liquidity
         if (tokenReserveBalance == 0) {
             // Transfer tokens from user to pool
-            bool success = token.transferFrom(msg.sender, address(this), _amount);
+            bool success = token.transferFrom(msg.sender, address(this), _amountOfTokens);
             require(success, SimpleDex__TransferFailed());
             // lpTokensToMint = ethReserveBalane = msg.value
             lpTokensToMint = ethReserveBalance;
@@ -82,7 +84,7 @@ contract SimpleDex is ERC20 {
         uint256 minTokenRequired = (msg.value * tokenReserveBalance) / initialEthReserveBalance;
 
         // Check if the provided amount of tokens in sufficient
-        require(_amount >= minTokenRequired, SimpleDex__InsufficientTokenAmount());
+        require(_amountOfTokens >= minTokenRequired, SimpleDex__InsufficientTokenAmount());
 
         // Transfer token from user to the pool
         bool sent = token.transferFrom(msg.sender, address(this), minTokenRequired);
@@ -95,6 +97,29 @@ contract SimpleDex is ERC20 {
         _mint(msg.sender, lpTokensToMint);
 
         return lpTokensToMint;
+    }
+
+    /**
+     * @notice `removeLiquidity` allows users to remove liquidity from the pool
+     * @param _amountOfLpTokens Amount of tokens to remove 
+     * @return ethToReturn Amount of eth that will be returned to user
+     * @return tokenToReturn Amount of token that will be returned to user
+     */
+    function removeLiquidity(uint256 _amountOfLpTokens) external returns (uint256 ethToReturn, uint256 tokenToReturn) {
+        require(_amountOfLpTokens > 0, SimpleDex__InvalidAmount());
+
+        uint256 ethReserveBalance = address(this).balance;
+        uint256 lpTokenTotalSupply = totalSupply();
+
+        // Calculate the amount of ETH and token to return to user
+        ethToReturn = (ethReserveBalance * _amountOfLpTokens) / lpTokenTotalSupply;
+        tokenToReturn = (getReserve() * _amountOfLpTokens) / lpTokenTotalSupply;
+
+        // Burn the lp tokens from the user and transfer the ETH and tokens
+        _burn(msg.sender, _amountOfLpTokens);
+        (bool ethSent, ) = payable(msg.sender).call{value: ethToReturn}("");
+        bool tokenSent = IERC20(tokenAddress).transfer(msg.sender, tokenToReturn);
+        require(ethSent && tokenSent, SimpleDex__TransferFailed());
     }
 
     /// Internal Functions ///
