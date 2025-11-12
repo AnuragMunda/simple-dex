@@ -25,6 +25,7 @@ contract SimpleDex is ERC20 {
     error SimpleDex__InsufficientTokenAmount();
     error SimpleDex__TransferFailed();
     error SimpleDex__InvalidAmount();
+    error SimpleDex__ReservesMustBeGreaterThanZero();
 
     /*==============================================================
                             STATE VARIABLES
@@ -60,7 +61,9 @@ contract SimpleDex is ERC20 {
 
     /**
      * @notice `addLiquidity` allows users to add liquidity to the pool
+     * 
      * @param _amountOfTokens Amount of tokens to add
+     * 
      * @return Amount of LP tokens minted
      */
     function addLiquidity(uint256 _amountOfTokens) external payable returns (uint256) {
@@ -107,7 +110,9 @@ contract SimpleDex is ERC20 {
 
     /**
      * @notice `removeLiquidity` allows users to remove liquidity from the pool
+     * 
      * @param _amountOfLpTokens Amount of tokens to remove
+     * 
      * @return ethToReturn Amount of eth that will be returned to user
      * @return tokenToReturn Amount of token that will be returned to user
      */
@@ -150,5 +155,29 @@ contract SimpleDex is ERC20 {
      */
     function _verifyAddress(address _address) private pure {
         require(_address != address(0), SimpleDex__CannotBeZeroAddress());
+    }
+
+    /**
+     * @notice  `getOutputAmountFromSwap` calculates the amount of output tokens to be received based on xy = (x + dx)(y - dy)
+     * 
+     * @param _inputAmount The amount of token user want to sell
+     * @param _inputReserve The reserve of the input token
+     * @param _outputReserve The reserve of the output token
+     * 
+     * @return outputAmount The ouput token amount user gets for selling the input token
+     */
+    function getOutputAmountFromSwap(uint256 _inputAmount, uint256 _inputReserve, uint256 _outputReserve)
+        external
+        pure
+        returns (uint256)
+    {
+        require(_inputReserve > 0 && _outputReserve > 0, SimpleDex__ReservesMustBeGreaterThanZero());
+
+        uint256 inputAmountWithFee = _inputAmount * 99;
+
+        uint256 numerator = inputAmountWithFee * _outputReserve;
+        uint256 denominator = (_inputReserve * 100) + inputAmountWithFee;
+
+        return numerator / denominator;
     }
 }
