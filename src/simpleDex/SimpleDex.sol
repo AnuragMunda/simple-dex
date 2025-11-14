@@ -2,7 +2,9 @@
 pragma solidity 0.8.30;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title Simple DEX - A Decentralised exchange inspired by Uniswap V1
@@ -17,7 +19,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *      - Guard against reentrancy when sending ETH
  *      - Correctly compute prices with constant-product formula
  */
-contract SimpleDex is ERC20 {
+contract SimpleDex is ERC20, ReentrancyGuard {
     /*==============================================================
                                 ERRORS
     ==============================================================*/
@@ -28,6 +30,11 @@ contract SimpleDex is ERC20 {
     error SimpleDex__ReservesMustBeGreaterThanZero();
     error SimpleDex__TokensReceivedLessThanExpected();
     error SimpleDex__EthReceivedLessThanExpected();
+
+    /*==============================================================
+                                TYPE DECLARATION
+    ==============================================================*/
+    using SafeERC20 for IERC20;
 
     /*==============================================================
                             STATE VARIABLES
@@ -53,7 +60,7 @@ contract SimpleDex is ERC20 {
     /*==============================================================
                                 FUNCTIONS
     ==============================================================*/
-    constructor(address _token) ERC20("ETH LP Token", "ELT") verifyAddress(_token) {
+    constructor(address _token) ERC20("SIMPLE ETH Token", "SET") verifyAddress(_token) {
         tokenAddress = _token;
     }
 
@@ -68,7 +75,7 @@ contract SimpleDex is ERC20 {
      *
      * @return Amount of LP tokens minted
      */
-    function addLiquidity(uint256 _amountOfTokens) external payable returns (uint256) {
+    function addLiquidity(uint256 _amountOfTokens) external payable nonReentrant returns (uint256) {
         uint256 lpTokensToMint;
         uint256 ethReserveBalance = address(this).balance;
         uint256 tokenReserveBalance = getReserve();
@@ -77,27 +84,25 @@ contract SimpleDex is ERC20 {
 
         // If the reserve is empty, take any user supplied value for initial liquidity
         if (tokenReserveBalance == 0) {
-            // Transfer tokens from user to pool
-            bool success = token.transferFrom(msg.sender, address(this), _amountOfTokens);
-            require(success, SimpleDex__TransferFailed());
             // lpTokensToMint = ethReserveBalane = msg.value
             lpTokensToMint = ethReserveBalance;
             // Mint LP tokens to user
             _mint(msg.sender, lpTokensToMint);
+            // Transfer tokens from user to pool
+            token.safeTransferFrom(msg.sender, address(this), _amountOfTokens);
 
             return lpTokensToMint;
         }
 
         // If the reserve is not empty, calculate the amount of LP tokens to be minted
-        uint256 initialEthReserveBalance = ethReserveBalance = msg.value;
+        uint256 initialEthReserveBalance = ethReserveBalance - msg.value;
         uint256 minTokenRequired = (msg.value * tokenReserveBalance) / initialEthReserveBalance;
 
         // Check if the provided amount of tokens in sufficient
         require(_amountOfTokens >= minTokenRequired, SimpleDex__InsufficientTokenAmount());
 
         // Transfer token from user to the pool
-        bool sent = token.transferFrom(msg.sender, address(this), minTokenRequired);
-        require(sent, SimpleDex__TransferFailed());
+        token.safeTransferFrom(msg.sender, address(this), minTokenRequired);
 
         // Calculate the amount of LP tokens
         lpTokensToMint = (totalSupply() * msg.value) / initialEthReserveBalance;
@@ -118,7 +123,11 @@ contract SimpleDex is ERC20 {
      * @return ethToReturn Amount of eth that will be returned to user
      * @return tokenToReturn Amount of token that will be returned to user
      */
-    function removeLiquidity(uint256 _amountOfLpTokens) external returns (uint256 ethToReturn, uint256 tokenToReturn) {
+    function removeLiquidity(uint256 _amountOfLpTokens)
+        external
+        nonReentrant
+        returns (uint256 ethToReturn, uint256 tokenToReturn)
+    {
         require(_amountOfLpTokens > 0, SimpleDex__InvalidAmount());
 
         uint256 ethReserveBalance = address(this).balance;
@@ -131,30 +140,38 @@ contract SimpleDex is ERC20 {
         // Burn the lp tokens from the user and transfer the ETH and tokens
         _burn(msg.sender, _amountOfLpTokens);
         (bool ethSent,) = payable(msg.sender).call{value: ethToReturn}("");
-        bool tokenSent = IERC20(tokenAddress).transfer(msg.sender, tokenToReturn);
-        require(ethSent && tokenSent, SimpleDex__TransferFailed());
+        require(ethSent, SimpleDex__TransferFailed());
+        IERC20(tokenAddress).safeTransfer(msg.sender, tokenToReturn);
 
         emit LiquidityRemoved(msg.sender, _amountOfLpTokens, ethToReturn, tokenToReturn);
     }
 
-    function ethToTokenSwap(uint256 _minTokensToReceive) external payable {
+    /**
+     * @notice `ethToTokenSwap` swaps eth for tokens
+     * @param _minTokensToReceive The minimum amount of tokens to receive
+     */
+    function ethToTokenSwap(uint256 _minTokensToReceive) external payable nonReentrant {
         uint256 tokenReserveBalance = getReserve();
         uint256 tokensToReceive =
             getOutputAmountFromSwap(msg.value, address(this).balance - msg.value, tokenReserveBalance);
         require(tokensToReceive >= _minTokensToReceive, SimpleDex__TokensReceivedLessThanExpected());
 
-        bool success = IERC20(tokenAddress).transfer(msg.sender, tokensToReceive);
-        require(success, SimpleDex__TransferFailed());
+        IERC20(tokenAddress).safeTransfer(msg.sender, tokensToReceive);
     }
 
-    function tokenToEthSwap(uint256 _tokensToSwap, uint256 _minEthToReceive) external {
+    /**
+     * @notice `tokenToEthSwap` swaps tokens for eth
+     * @param _tokensToSwap The amount of tokens to swap
+     * @param _minEthToReceive The minimum amount of eth to receive
+     */
+    function tokenToEthSwap(uint256 _tokensToSwap, uint256 _minEthToReceive) external nonReentrant {
         uint256 tokenReserveBalance = getReserve();
         uint256 ethToReceive = getOutputAmountFromSwap(_tokensToSwap, tokenReserveBalance, address(this).balance);
         require(ethToReceive >= _minEthToReceive, SimpleDex__EthReceivedLessThanExpected());
 
-        bool success = IERC20(tokenAddress).transferFrom(msg.sender, address(this), _tokensToSwap);
-        (bool sent, ) = payable(msg.sender).call{value: ethToReceive}("");
-        require(success && sent, SimpleDex__TransferFailed());
+        IERC20(tokenAddress).safeTransferFrom(msg.sender, address(this), _tokensToSwap);
+        (bool sent,) = payable(msg.sender).call{value: ethToReceive}("");
+        require(sent, SimpleDex__TransferFailed());
     }
 
     /*---------------------- View/Pure Functions ----------------------*/
